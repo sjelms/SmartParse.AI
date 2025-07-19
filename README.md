@@ -1,7 +1,5 @@
 # SmartParse.AI
 
-# SmartParse.AI
-
 SmartParse.AI is an intelligent file renaming and organization tool for macOS. It uses AI to generate meaningful filenames for PDFs, images, and text files based on their content, then sorts them into subfolders automatically.
 
 ---

@@ -3,7 +3,6 @@
 # and routes them to appropriate processing functions.
 
 import time
-import os
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -14,13 +13,36 @@ from bs4 import BeautifulSoup
 import fitz  # PyMuPDF
 import threading
 import queue
-from pync import Notifier
+import base64
 
-client = openai.OpenAI()
+try:
+    from pync import Notifier
+    notifier_available = True
+except ImportError:
+    notifier_available = False
 
 # Load environment variables from .env file
 load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
+
+openai.api_key = None
+api_key = None
+try:
+    api_key = openai.api_key or None
+except Exception:
+    api_key = None
+
+if not api_key:
+    api_key = None
+    try:
+        import os
+        api_key = os.getenv("OPENAI_API_KEY")
+    except Exception:
+        api_key = None
+
+if not api_key:
+    raise RuntimeError("OPENAI_API_KEY environment variable not set")
+
+client = openai.OpenAI(api_key=api_key)
 
 # Define which model to use for each type
 MODEL_TEXT = "gpt-3.5-turbo"
@@ -42,24 +64,67 @@ PDF_EXTENSION = ".pdf"
 
 # Max files to queue for processing at a time
 MAX_QUEUE_SIZE = 5
-file_queue = queue.Queue(maxsize=MAX_QUEUE_SIZE)
+file_queue: queue.Queue[Path] = queue.Queue(maxsize=MAX_QUEUE_SIZE)
 
-def worker():
+def notify_user(message: str, title: str = "SmartParse.AI", sound: str = "default") -> None:
+    """
+    Sends a user notification if possible. Falls back to print if no GUI notifier is available.
+    """
+    if notifier_available:
+        try:
+            Notifier.notify(message, title=title, sound=sound)
+        except Exception:
+            print(f"Notification failed: {message}")
+    else:
+        print(f"{title}: {message}")
+
+def worker() -> None:
+    """
+    Background worker thread that processes files from the queue.
+    """
     while True:
         filepath = file_queue.get()
         if filepath is None:
             break
         FileHandler().handle_file(filepath)
         file_queue.task_done()
+        if file_queue.empty():
+            refill_queue()
 
-# Start the background worker
+
+
+# Start the background worker thread
 threading.Thread(target=worker, daemon=True).start()
 
-# Note on Python function declarations:
-# Functions are defined but not executed until they are called.
-# This allows the script to define all necessary logic before any processing begins.
 
-def mark_as_failed(filepath: Path):
+def refill_queue() -> None:
+    """
+    Scans the WATCH_DIR for any remaining unprocessed files and queues the next batch.
+    Skips files already renamed or moved.
+    """
+    print("Scanning for additional files to queue...")
+    try:
+        files = list(WATCH_DIR.glob("*"))
+        queued = 0
+        for filepath in files:
+            if (
+                not filepath.is_file()
+                or filepath.name.startswith("failed_")
+                or filepath.parent != WATCH_DIR
+                or queued >= MAX_QUEUE_SIZE
+            ):
+                continue
+            try:
+                file_queue.put_nowait(filepath)
+                print(f"Re-queued file: {filepath}")
+                queued += 1
+            except queue.Full:
+                print("Queue is full. Refill paused.")
+                break
+    except Exception as e:
+        print(f"Error during refill queue scan: {e}")
+
+def mark_as_failed(filepath: Path) -> Path:
     """
     Marks a file as failed by renaming it with a 'failed_' prefix in the same directory.
     This function is used to flag files that could not be processed successfully.
@@ -70,12 +135,12 @@ def mark_as_failed(filepath: Path):
     try:
         filepath.rename(failed_path)
         print(f"Marked file as failed: {failed_path}")
-        Notifier.notify(f"Could not process: {filepath.name}", title="SmartParse.AI", sound="default")
+        notify_user(f"Could not process: {filepath.name}")
     except Exception as e:
         print(f"Could not mark file as failed ({filepath}): {e}")
     return failed_path
 
-def move_file_to_subfolder(filepath: Path, folder_name: str):
+def move_file_to_subfolder(filepath: Path, folder_name: str) -> Path:
     """
     Moves the given file to a specified subfolder within the WATCH_DIR.
     Creates the subfolder if it does not exist.
@@ -89,7 +154,10 @@ def move_file_to_subfolder(filepath: Path, folder_name: str):
 
 # Handler class that responds to file system events such as file creation.
 class FileHandler(FileSystemEventHandler):
-    def on_created(self, event):
+    def on_created(self, event) -> None:
+        """
+        Called when a file or directory is created.
+        """
         if event.is_directory:
             return
         filepath = Path(event.src_path)
@@ -99,15 +167,13 @@ class FileHandler(FileSystemEventHandler):
         except queue.Full:
             print(f"Queue full. Skipping file: {filepath}")
 
-    def process_image(self, filepath):
+    def process_image(self, filepath: Path) -> None:
         """
         Processes image files using GPT-4o vision model to generate a descriptive filename.
         Renames and moves the file to the 'images' subfolder.
         """
         print(f"Processing image: {filepath}")
         try:
-            import base64
-
             with open(filepath, "rb") as img_file:
                 image_data = img_file.read()
                 image_base64 = base64.b64encode(image_data).decode("utf-8")
@@ -116,12 +182,13 @@ class FileHandler(FileSystemEventHandler):
                 {
                     "role": "system",
                     "content": (
-                        "You are a helpful assistant that generates short, descriptive filenames "
-                        "based on the visual content of the image. Return a short, descriptive filename using up to 7 lowercase words, "
-                        "separated by underscores, followed by a category keyword such as photo, screenshot, illustration, diagram, cartoon, etc. "
-                        "Use only lowercase words, no punctuation, and no file extensions. Separate the main description and keyword with an underscore. "
-                        "Example: dog_riding_skateboard_photo"
-                    ),
+    "You are a helpful assistant that generates short, descriptive filenames "
+    "based on the visual and textual content of an image. If text is present, extract key themes, names, or messages. "
+    "Return a filename with up to 10 lowercase words with no punctuation between words, followed by a single underscore and then a category keyword (e.g. quote, sign, cartoon). "
+    "Do not include file extensions. "
+    "Example: dog riding skateboard_photo "
+    "Example: elie wiesel quote silence supports oppressor_quote"
+),
                 },
                 {
                     "role": "user",
@@ -139,26 +206,26 @@ class FileHandler(FileSystemEventHandler):
             response = client.chat.completions.create(
                 model=MODEL_IMAGE,
                 messages=messages,
-                max_tokens=20,
+                max_tokens=30,
                 temperature=0.2,
                 n=1,
             )
             description = response.choices[0].message.content.strip()
-            parts = description.lower().split()
-            description = "_".join(parts)
+            description = description.lower().strip()
             timestamp = get_file_datetime_string(filepath)
+            # Only add underscore before timestamp, not between words
             new_name = f"{description}_{timestamp}{filepath.suffix.lower()}"
             new_path = filepath.with_name(new_name)
             filepath.rename(new_path)
             print(f"Renamed image to: {new_path}")
             moved_path = move_file_to_subfolder(new_path, "images")
-            Notifier.notify("Image processed and renamed", title="SmartParse.AI")
+            notify_user("Image processed and renamed")
 
         except Exception as e:
             print(f"Error processing image file {filepath}: {e}")
             mark_as_failed(filepath)
 
-    def process_pdf(self, filepath):
+    def process_pdf(self, filepath: Path) -> None:
         """
         Processes PDF files by extracting metadata or text to generate a descriptive filename.
         Renames and moves the file to the 'pdfs' subfolder.
@@ -190,12 +257,12 @@ class FileHandler(FileSystemEventHandler):
             filepath.rename(new_path)
             print(f"Renamed PDF to: {new_path}")
             moved_path = move_file_to_subfolder(new_path, "pdfs")
-            Notifier.notify("PDF processed and renamed", title="SmartParse.AI")
+            notify_user("PDF processed and renamed")
         except Exception as e:
             print(f"Error processing PDF file {filepath}: {e}")
             mark_as_failed(filepath)
 
-    def process_textfile(self, filepath):
+    def process_textfile(self, filepath: Path) -> None:
         """
         Processes text files by reading their content, generating a descriptive filename,
         renaming, and moving them to the 'text' subfolder.
@@ -221,12 +288,12 @@ class FileHandler(FileSystemEventHandler):
             filepath.rename(new_path)
             print(f"Renamed file to: {new_path}")
             moved_path = move_file_to_subfolder(new_path, "text")
-            Notifier.notify("Text file processed and renamed", title="SmartParse.AI")
+            notify_user("Text file processed and renamed")
         except Exception as e:
             print(f"Error processing text file {filepath}: {e}")
             mark_as_failed(filepath)
 
-    def handle_file(self, filepath: Path):
+    def handle_file(self, filepath: Path) -> None:
         """
         Determines the file type based on extension and routes to the correct processor.
         """
