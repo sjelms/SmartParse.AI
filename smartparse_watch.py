@@ -89,11 +89,27 @@ def worker() -> None:
         filepath = file_queue.get()
         if filepath is None:
             break
-        FileHandler().handle_file(filepath)
-        file_queue.task_done()
-        if file_queue.empty():
-            refill_queue()
+        try:
+            # --- Race Condition Handling ---
+            # Wait briefly and check if file size remains stable
+            time.sleep(1)
+            initial_size = filepath.stat().st_size
+            time.sleep(1)
+            final_size = filepath.stat().st_size
 
+            if initial_size != final_size:
+                print(f"File size still changing for {filepath.name}. Re-queuing.")
+                file_queue.put(filepath)  # Re-queue file for later
+                file_queue.task_done()
+                continue  # Skip to next file
+
+            FileHandler().handle_file(filepath)
+            file_queue.task_done()
+            if file_queue.empty():
+                refill_queue()
+        except Exception as e:
+            print(f"Error processing file {filepath}: {e}")
+            file_queue.task_done()
 
 
 # Start the background worker thread

@@ -4,9 +4,24 @@ SmartParse.AI is an intelligent file renaming and organization tool for macOS. I
 
 ---
 
+### 🖱️ Quick Action (macOS Finder Right-Click)
+
+To enable the right-click Finder action for SmartParse.AI:
+
+1. Download or clone this repo.
+2. Open the `SmartParse.workflow` file.
+3. Double-click it to install into Automator.
+4. Once added, right-click the `SmartParseWatch` folder in Finder and choose `Quick Actions → Run SmartParse.AI`.
+
+This will run the script in batch mode, renaming and organizing all files in the watch folder.
+
+Requires: Python 3.13, and the script path inside the workflow may need to be updated depending on your local setup.
+
 ## 📌 Intent
 
 SmartParse.AI aims to automate the renaming of files using AI-generated content summaries and timestamps, while keeping your files organized. It is particularly useful for managing screenshots, academic PDFs, meeting notes, and other content-rich files.
+
+It is designed to be lightweight and non-intrusive, running only when triggered manually via a macOS right-click Finder action.
 
 ---
 
@@ -18,6 +33,9 @@ SmartParse.AI aims to automate the renaming of files using AI-generated content 
 - Extracts metadata or content to generate a new filename.
 - Renames and moves the file to an appropriate subfolder (`images`, `pdfs`, `text`).
 - Sends macOS notifications when processing is complete or if a file fails.
+- Optional automation via macOS Automator workflow (included) enables on-demand use without needing Terminal.
+- Processes files in safe batches (default: 20), continuing automatically until the folder is empty.
+- Includes race condition check to ensure large files are fully written before processing.
 
 ---
 
@@ -34,7 +52,11 @@ SmartParse.AI aims to automate the renaming of files using AI-generated content 
 ## 📤 Output
 
 - Files are renamed to:  
-  `description_keyword_YYYY-MM-DD_HH.MM.SS.ext`
+  `descriptive text keyword_YYYY-MM-DD_HH.MM.SS.ext`
+
+  - The filename contains a natural-language description (up to 10 lowercase words) with no punctuation, followed by a single underscore and a category keyword (e.g. quote, article, receipt, cartoon, diagram).
+  - Category is inferred from file type and content.
+
 - Example:
   - `smartphone_schematic_diagram_2025-07-19_14.22.03.png`
   - `modular_housing_case_study_2025-07-19_13.05.10.pdf`
@@ -47,7 +69,10 @@ SmartParse.AI aims to automate the renaming of files using AI-generated content 
 - **Python 3.13.5**
 - **OpenAI API** (gpt-3.5-turbo and gpt-4o)
 - **PyMuPDF** for PDF processing
-- **BeautifulSoup4 + lxml** for HTML and text parsing
+- **BeautifulSoup4 + lxml**
+- **PyMuPDF** for metadata and visual text extraction in PDFs
+- **macOS Automator** integration via Quick Action workflow
+- **Race condition handling** for stable file readiness before processing
 - **watchdog** for file system monitoring
 - **pync** and `terminal-notifier` for macOS notifications
 
