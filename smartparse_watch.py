@@ -66,7 +66,7 @@ TEXT_EXTENSIONS = {
 PDF_EXTENSION = ".pdf"
 
 # Max files to queue for processing at a time
-MAX_QUEUE_SIZE = 5
+MAX_QUEUE_SIZE = 20
 file_queue: queue.Queue[Path] = queue.Queue(maxsize=MAX_QUEUE_SIZE)
 
 def notify_user(message: str, title: str = "SmartParse.AI", sound: str = "default") -> None:
@@ -318,11 +318,11 @@ def generate_filename_from_text(text: str, model: str) -> str:
     """
     Uses OpenAI's API to generate a short, descriptive filename based on provided text.
     The filename consists of up to 10 lowercase words with no punctuation between words,
-    followed by a single underscore and a category keyword (e.g. article, report, draft).
+    followed by a single underscore and a category keyword (e.g. article, report, receipt, form, calendar, letter, invoice, contract, whitepaper, memo, transcript, draft).
     """
     messages = [
         {"role": "system", "content": (
-            "You are a helpful assistant that generates short, descriptive filenames based on provided file content. Return a short, descriptive filename using up to 10 lowercase words with no punctuation between words, followed by a single underscore and then a category keyword (e.g. article, report, draft). Do not include file extensions. If applicable, prioritize including key identifiers such as paper titles, author names, organizations (e.g. McKinsey, Ministry of Housing, Columbia University), or publication dates.\n\nExample: product configuration in construction patrik jensen_article\nExample: 2024 housing policy report uk government_report"
+            "You are a helpful assistant that generates short, descriptive filenames based on provided file content. Return a short, descriptive filename using up to 10 lowercase words with no punctuation between words, followed by a single underscore and a category keyword (e.g. article, report, receipt, form, calendar, letter, invoice, contract, whitepaper, memo, transcript, draft). Do not include file extensions. If applicable, prioritize including key identifiers such as paper titles, author names, organizations (e.g. McKinsey, Ministry of Housing, Columbia University), or publication dates.\n\nExample: product configuration in construction patrik jensen_article\nExample: 2024 housing policy report uk government_report\nExample: nordvpn 2 year subscription receipt_2023-01-21_16.50.06.pdf"
         )},
         {"role": "user", "content": text},
     ]
@@ -355,23 +355,26 @@ if __name__ == "__main__":
     print(f"Running SmartParse.AI batch processor on: {WATCH_DIR}")
 
     try:
-        files = list(WATCH_DIR.glob("*"))
-        for filepath in files:
-            if (
-                filepath.is_file()
-                and not filepath.name.startswith("failed_")
-                and filepath.parent == WATCH_DIR
-                and not filepath.name.startswith(".")
-            ):
-                try:
-                    file_queue.put_nowait(filepath)
-                    print(f"Queued file: {filepath}")
-                except queue.Full:
-                    print(f"Queue full. Skipping file: {filepath}")
-                    break
+        files_remaining = True
+        while files_remaining:
+            files_remaining = False
+            files = list(WATCH_DIR.glob("*"))
+            for filepath in files:
+                if (
+                    filepath.is_file()
+                    and not filepath.name.startswith("failed_")
+                    and filepath.parent == WATCH_DIR
+                    and not filepath.name.startswith(".")
+                ):
+                    try:
+                        file_queue.put_nowait(filepath)
+                        print(f"Queued file: {filepath}")
+                        files_remaining = True
+                    except queue.Full:
+                        print(f"Queue full. Pausing before next refill...")
+                        break
+            file_queue.join()
 
-        # Wait for queue to be processed and exit
-        file_queue.join()
         file_queue.put(None)  # Signal the worker thread to exit
 
     except Exception as e:
