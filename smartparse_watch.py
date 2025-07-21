@@ -14,6 +14,7 @@ import fitz  # PyMuPDF
 import threading
 import queue
 import base64
+import sys
 
 try:
     from pync import Notifier
@@ -49,8 +50,10 @@ MODEL_TEXT = "gpt-3.5-turbo"
 MODEL_PDF = "gpt-3.5-turbo"
 MODEL_IMAGE = "gpt-4o-2024-11-20"
 
-# Define the directory to watch (in iCloud Documents > SmartParseWatch)
-WATCH_DIR = Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs" / "Documents" / "SmartParseWatch"
+if len(sys.argv) > 1:
+    WATCH_DIR = Path(sys.argv[1]).expanduser().resolve()
+else:
+    WATCH_DIR = Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs" / "Documents" / "SmartParseWatch"
 
 # File extensions grouped by type
 IMAGE_EXTENSIONS = {
@@ -110,6 +113,7 @@ def refill_queue() -> None:
             if (
                 not filepath.is_file()
                 or filepath.name.startswith("failed_")
+                or filepath.name.startswith(".")  # Ignore hidden files like .DS_Store
                 or filepath.parent != WATCH_DIR
                 or queued >= MAX_QUEUE_SIZE
             ):
@@ -237,20 +241,42 @@ class FileHandler(FileSystemEventHandler):
             # Try to get title from metadata
             title = doc.metadata.get("title", "")
             if title and title.strip():
-                description = title.strip()
+                # Use metadata title only if it's likely meaningful
+                check_description = generate_filename_from_text(title.strip(), model=MODEL_PDF)
+                if check_description.lower().strip() != "title":
+                    description = check_description
+                else:
+                    if doc.page_count > 0:
+                        try:
+                            page = doc.load_page(0)
+                            text = page.get_text().strip()
+                        except Exception as e:
+                            print(f"Error extracting text from first page: {e}")
+                            text = ""
+                    else:
+                        text = ""
+                    if not text:
+                        print(f"PDF {filepath} has no extractable text. Marking as failed.")
+                        mark_as_failed(filepath)
+                        return
+                    description = generate_filename_from_text(text, model=MODEL_PDF)
             else:
-                # No title, extract text from first page
-                text = ""
                 if doc.page_count > 0:
-                    page = doc.load_page(0)
-                    text = page.get_text().strip()
+                    try:
+                        page = doc.load_page(0)
+                        text = page.get_text().strip()
+                    except Exception as e:
+                        print(f"Error extracting text from first page: {e}")
+                        text = ""
+                else:
+                    text = ""
                 if not text:
                     print(f"PDF {filepath} has no extractable text. Marking as failed.")
                     mark_as_failed(filepath)
                     return
                 description = generate_filename_from_text(text, model=MODEL_PDF)
-            # Clean description: replace spaces with underscores, lowercase, remove punctuation
-            description = "_".join(description.lower().split())
+            # Clean description: lowercase with spaces, no underscores
+            description = description.lower().replace("_", " ").strip()
             timestamp = get_file_datetime_string(filepath)
             new_name = f"{description}_{timestamp}{filepath.suffix.lower()}"
             new_path = filepath.with_name(new_name)
@@ -282,6 +308,7 @@ class FileHandler(FileSystemEventHandler):
                 mark_as_failed(filepath)
                 return
             description = generate_filename_from_text(text, model=MODEL_TEXT)
+            description = description.lower().replace("_", " ").strip()
             timestamp = get_file_datetime_string(filepath)
             new_name = f"{description}_{timestamp}{ext}"
             new_path = filepath.with_name(new_name)
@@ -311,21 +338,19 @@ class FileHandler(FileSystemEventHandler):
 def generate_filename_from_text(text: str, model: str) -> str:
     """
     Uses OpenAI's API to generate a short, descriptive filename based on provided text.
-    The filename consists of up to 7 lowercase words separated by underscores,
-    without any dates, punctuation, or file extensions.
+    The filename consists of up to 10 lowercase words with no punctuation between words,
+    followed by a single underscore and a category keyword (e.g. article, report, draft).
     """
     messages = [
         {"role": "system", "content": (
-            "You are a helpful assistant that generates short, descriptive filenames "
-            "based on provided file content. Return a short, descriptive filename using up to "
-            "7 lowercase words, separated by underscores. Do not include any dates, punctuation, or file extensions."
+            "You are a helpful assistant that generates short, descriptive filenames based on provided file content. Return a short, descriptive filename using up to 10 lowercase words with no punctuation between words, followed by a single underscore and then a category keyword (e.g. article, report, draft). Do not include file extensions. If applicable, prioritize including key identifiers such as paper titles, author names, organizations (e.g. McKinsey, Ministry of Housing, Columbia University), or publication dates.\n\nExample: product configuration in construction patrik jensen_article\nExample: 2024 housing policy report uk government_report"
         )},
         {"role": "user", "content": text},
     ]
     response = client.chat.completions.create(
         model=model,
         messages=messages,
-        max_tokens=20,
+        max_tokens=50,
         temperature=0.2,
         n=1,
     )
@@ -348,19 +373,27 @@ def get_file_datetime_string(file_path: Path) -> str:
 
 # Main execution block to start the folder watcher
 if __name__ == "__main__":
-    print(f"Starting SmartParse.AI watcher on: {WATCH_DIR}")
-    event_handler = FileHandler()
-    observer = Observer()
-    # Schedule the observer to watch the directory recursively
-    observer.schedule(event_handler, str(WATCH_DIR), recursive=True)
-    observer.start()
+    print(f"Running SmartParse.AI batch processor on: {WATCH_DIR}")
 
     try:
-        while True:
-            time.sleep(1)  # Keep the script alive
-    except KeyboardInterrupt:
-        observer.stop()
-        print("Stopped SmartParse.AI watcher.")
-        file_queue.put(None)  # Signal the worker to exit
+        files = list(WATCH_DIR.glob("*"))
+        for filepath in files:
+            if (
+                filepath.is_file()
+                and not filepath.name.startswith("failed_")
+                and filepath.parent == WATCH_DIR
+                and not filepath.name.startswith(".")
+            ):
+                try:
+                    file_queue.put_nowait(filepath)
+                    print(f"Queued file: {filepath}")
+                except queue.Full:
+                    print(f"Queue full. Skipping file: {filepath}")
+                    break
 
-    observer.join()
+        # Wait for queue to be processed and exit
+        file_queue.join()
+        file_queue.put(None)  # Signal the worker thread to exit
+
+    except Exception as e:
+        print(f"Batch processing failed: {e}")
