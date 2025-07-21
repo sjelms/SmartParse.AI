@@ -231,50 +231,29 @@ class FileHandler(FileSystemEventHandler):
 
     def process_pdf(self, filepath: Path) -> None:
         """
-        Processes PDF files by extracting metadata or text to generate a descriptive filename.
+        Processes PDF files by extracting text to generate a descriptive filename.
         Renames and moves the file to the 'pdfs' subfolder.
         """
         print(f"Processing PDF: {filepath}")
         try:
             # Open PDF with PyMuPDF
             doc = fitz.open(filepath)
-            # Try to get title from metadata
-            title = doc.metadata.get("title", "")
-            if title and title.strip():
-                # Use metadata title only if it's likely meaningful
-                check_description = generate_filename_from_text(title.strip(), model=MODEL_PDF)
-                if check_description.lower().strip() != "title":
-                    description = check_description
-                else:
-                    if doc.page_count > 0:
-                        try:
-                            page = doc.load_page(0)
-                            text = page.get_text().strip()
-                        except Exception as e:
-                            print(f"Error extracting text from first page: {e}")
-                            text = ""
-                    else:
-                        text = ""
-                    if not text:
-                        print(f"PDF {filepath} has no extractable text. Marking as failed.")
-                        mark_as_failed(filepath)
-                        return
-                    description = generate_filename_from_text(text, model=MODEL_PDF)
-            else:
-                if doc.page_count > 0:
-                    try:
-                        page = doc.load_page(0)
-                        text = page.get_text().strip()
-                    except Exception as e:
-                        print(f"Error extracting text from first page: {e}")
-                        text = ""
-                else:
+            if doc.page_count > 0:
+                try:
+                    page = doc.load_page(0)
+                    text = page.get_text().strip()
+                except Exception as e:
+                    print(f"Error extracting text from first page: {e}")
                     text = ""
-                if not text:
-                    print(f"PDF {filepath} has no extractable text. Marking as failed.")
-                    mark_as_failed(filepath)
-                    return
-                description = generate_filename_from_text(text, model=MODEL_PDF)
+            else:
+                text = ""
+
+            if not text:
+                print(f"PDF {filepath} has no extractable text. Marking as failed.")
+                mark_as_failed(filepath)
+                return
+
+            description = generate_filename_from_text(text, model=MODEL_PDF)
             # Clean description: lowercase with spaces, no underscores
             description = description.lower().replace("_", " ").strip()
             timestamp = get_file_datetime_string(filepath)
