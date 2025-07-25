@@ -85,6 +85,18 @@ It is designed to be lightweight and non-intrusive, running only when triggered 
 - **Queue stuck or lagging?** Limit drops to under 5 files at once. Use `MAX_QUEUE_SIZE` in the script to adjust.
 - **OpenAI errors?** Confirm that your `.env` file contains a valid API key:  
   `OPENAI_API_KEY=your-key-here`
+- **ModuleNotFoundError for `macos_tags`?**
+    - This means your script is not running in the correct Python virtual environment. You must activate your virtual environment before running the script, or use the full path to the Python interpreter in your venv.
+    - **Example:**
+      ```sh
+      # Activate your virtual environment and run the script
+      source ~/python-venv/bin/activate  # Ensures all required packages are available
+      python3 /Users/stephenelms/Dev/SmartParse.AI/smartparse_watch.py
+      ```
+      # Or, run directly with the venv's Python interpreter (recommended for Automator):
+      ~/python-venv/bin/python /Users/stephenelms/Dev/SmartParse.AI/smartparse_watch.py
+      ```
+    - This ensures the script uses the correct environment and all installed packages.
 - **Still stuck?** Check the Terminal for error logs or debug messages printed during execution.
 
 ---

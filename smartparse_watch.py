@@ -15,12 +15,16 @@ import threading
 import queue
 import base64
 import sys
+from typing import Optional
 
 try:
     from pync import Notifier
     notifier_available = True
 except ImportError:
     notifier_available = False
+    Notifier = None  # type: ignore
+
+from macos_tags import add as add_finder_tag, Tag, Color, set_all  # type: ignore
 
 # Load environment variables from .env file
 load_dotenv()
@@ -67,13 +71,13 @@ PDF_EXTENSION = ".pdf"
 
 # Max files to queue for processing at a time
 MAX_QUEUE_SIZE = 20
-file_queue: queue.Queue[Path] = queue.Queue(maxsize=MAX_QUEUE_SIZE)
+file_queue: queue.Queue[Optional[Path]] = queue.Queue(maxsize=MAX_QUEUE_SIZE)
 
 def notify_user(message: str, title: str = "SmartParse.AI", sound: str = "default") -> None:
     """
     Sends a user notification if possible. Falls back to print if no GUI notifier is available.
     """
-    if notifier_available:
+    if notifier_available and Notifier is not None:
         try:
             Notifier.notify(message, title=title, sound=sound)
         except Exception:
@@ -180,7 +184,8 @@ class FileHandler(FileSystemEventHandler):
         """
         if event.is_directory:
             return
-        filepath = Path(event.src_path)
+        src_path = event.src_path.decode() if isinstance(event.src_path, bytes) else event.src_path
+        filepath = Path(src_path)
         print(f"Queued file: {filepath}")
         try:
             file_queue.put_nowait(filepath)
@@ -189,7 +194,7 @@ class FileHandler(FileSystemEventHandler):
 
     def process_image(self, filepath: Path) -> None:
         """
-        Processes image files using GPT-4o vision model to generate a descriptive filename.
+        Processes image files using GPT-4o vision model to generate a descriptive filename and Finder tag.
         Renames and moves the file to the 'images' subfolder.
         """
         print(f"Processing image: {filepath}")
@@ -198,17 +203,21 @@ class FileHandler(FileSystemEventHandler):
                 image_data = img_file.read()
                 image_base64 = base64.b64encode(image_data).decode("utf-8")
 
+            allowed_categories = [
+                "Quote", "Sign", "Cartoon", "Meme", "Photo", "Illustration", "Diagram", "Screenshot", "Logo", "Map", "Chart/Graph"
+            ]
             messages = [
                 {
                     "role": "system",
                     "content": (
-    "You are a helpful assistant that generates short, descriptive filenames "
-    "based on the visual and textual content of an image. If text is present, extract key themes, names, or messages. "
-    "Return a filename with up to 10 lowercase words with no punctuation between words, followed by a single underscore and then a category keyword (e.g. quote, sign, cartoon). "
-    "Do not include file extensions. "
-    "Example: dog riding skateboard_photo "
-    "Example: elie wiesel quote silence supports oppressor_quote"
-),
+                        "You are a helpful assistant that generates short, descriptive filenames and a category label based on the visual and textual content of an image. "
+                        "If text is present, extract key themes, names, or messages. "
+                        "The filename must consist of up to 10 lowercase words, no punctuation, no underscores, no file extension. "
+                        "Return ONLY a JSON object with two fields: 'description' (up to 10 lowercase words, no punctuation, no underscores, no file extension) and 'category' (one of: Quote, Sign, Cartoon, Meme, Photo, Illustration, Diagram, Screenshot, Logo, Map, Chart/Graph). "
+                        "The 'description' will be used as the filename (with a timestamp), and the 'category' will be used as a Finder tag (not in the filename). "
+                        "If the content does not fit any category, use 'Other'. "
+                        "Example: {\"description\": \"dog riding skateboard\", \"category\": \"Photo\"} (filename: dog riding skateboard_2025-07-19_14.22.03.png, tag: Photo)"
+                    ),
                 },
                 {
                     "role": "user",
@@ -222,61 +231,74 @@ class FileHandler(FileSystemEventHandler):
                     ],
                 },
             ]
-
             response = client.chat.completions.create(
                 model=MODEL_IMAGE,
                 messages=messages,
-                max_tokens=30,
+                max_tokens=80,
                 temperature=0.2,
                 n=1,
             )
-            description = response.choices[0].message.content.strip()
-            description = description.lower().strip()
+            import json
+            try:
+                result = json.loads((response.choices[0].message.content or '').strip())
+                description = (result.get('description') or '').lower().replace('_', ' ').strip()
+                category = (result.get('category') or 'Other')
+                if not isinstance(category, str):
+                    category = str(category)
+                category = (category or '').strip()
+            except Exception:
+                description = (response.choices[0].message.content or '').strip().lower().replace('_', ' ').strip()
+                category = 'Other'
             timestamp = get_file_datetime_string(filepath)
-            # Only add underscore before timestamp, not between words
             new_name = f"{description}_{timestamp}{filepath.suffix.lower()}"
             new_path = filepath.with_name(new_name)
             filepath.rename(new_path)
             print(f"Renamed image to: {new_path}")
+            tag = Tag(name=category, color=Color.YELLOW)
+            set_all([tag], file=str(new_path))  # Use set_all to ensure color is applied
             moved_path = move_file_to_subfolder(new_path, "images")
             notify_user("Image processed and renamed")
-
         except Exception as e:
             print(f"Error processing image file {filepath}: {e}")
             mark_as_failed(filepath)
 
     def process_pdf(self, filepath: Path) -> None:
         """
-        Processes PDF files by extracting text to generate a descriptive filename.
+        Processes PDF files by extracting text to generate a descriptive filename and Finder tag.
         Renames and moves the file to the 'pdfs' subfolder.
         """
         print(f"Processing PDF: {filepath}")
         try:
-            # Open PDF with PyMuPDF
             doc = fitz.open(filepath)
             if doc.page_count > 0:
                 try:
                     page = doc.load_page(0)
-                    text = page.get_text().strip()
+                    text = page.get_text().strip()  # type: ignore
                 except Exception as e:
                     print(f"Error extracting text from first page: {e}")
                     text = ""
             else:
                 text = ""
-
             if not text:
                 print(f"PDF {filepath} has no extractable text. Marking as failed.")
                 mark_as_failed(filepath)
                 return
-
-            description = generate_filename_from_text(text, model=MODEL_PDF)
-            # Clean description: lowercase with spaces, no underscores
-            description = description.lower().replace("_", " ").strip()
+            allowed_categories = [
+                "Book", "Academic Paper", "Contract", "Invoice", "Receipt", "Statement", "Manual/Guide", "Report", "Form", "Presentation", "Brochure/Flyer", "Resume/CV", "Letter", "Certificate", "Agreement"
+            ]
+            description, category = generate_filename_and_category_from_text(
+                text,
+                model=MODEL_PDF,
+                allowed_categories=allowed_categories,
+                prompt_extra="Prioritize including key identifiers such as paper titles, author names, organizations (e.g. McKinsey, Ministry of Housing, Columbia University), or publication dates. The filename must consist of up to 10 lowercase words, no punctuation, no underscores, no file extension."
+            )
             timestamp = get_file_datetime_string(filepath)
             new_name = f"{description}_{timestamp}{filepath.suffix.lower()}"
             new_path = filepath.with_name(new_name)
             filepath.rename(new_path)
             print(f"Renamed PDF to: {new_path}")
+            tag = Tag(name=category, color=Color.RED)
+            set_all([tag], file=str(new_path))  # Use set_all to ensure color is applied
             moved_path = move_file_to_subfolder(new_path, "pdfs")
             notify_user("PDF processed and renamed")
         except Exception as e:
@@ -285,7 +307,7 @@ class FileHandler(FileSystemEventHandler):
 
     def process_textfile(self, filepath: Path) -> None:
         """
-        Processes text files by reading their content, generating a descriptive filename,
+        Processes text files by reading their content, generating a descriptive filename and Finder tag,
         renaming, and moving them to the 'text' subfolder.
         Supports plain text and HTML files.
         """
@@ -302,13 +324,28 @@ class FileHandler(FileSystemEventHandler):
                 print(f"Text file {filepath} has insufficient content. Marking as failed.")
                 mark_as_failed(filepath)
                 return
-            description = generate_filename_from_text(text, model=MODEL_TEXT)
-            description = description.lower().replace("_", " ").strip()
+            allowed_categories = [
+                "Notes", "Outline", "Draft", "Paper", "Journal Entry", "List", "Code", "Markdown", "Recipe", "Correspondence", "Brainstorm", "Transcript"
+            ]
+            description, category = generate_filename_and_category_from_text(
+                text,
+                model=MODEL_TEXT,
+                allowed_categories=allowed_categories,
+                prompt_extra=(
+                    "The filename must consist of up to 10 lowercase words, no punctuation, no underscores, no file extension. "
+                    "Choose the most specific and accurate category from the list based on the content. "
+                    "Do not default to 'Correspondence' unless the file is truly a letter, email, or message. "
+                    "If the file is a transcript of a conversation, interview, or meeting, use 'Transcript'. "
+                    "If the content is a list, use 'List'. If it is a draft, use 'Draft', etc."
+                )
+            )
             timestamp = get_file_datetime_string(filepath)
             new_name = f"{description}_{timestamp}{ext}"
             new_path = filepath.with_name(new_name)
             filepath.rename(new_path)
             print(f"Renamed file to: {new_path}")
+            tag = Tag(name=category, color=Color.BLUE)
+            set_all([tag], file=str(new_path))  # Use set_all to ensure color is applied
             moved_path = move_file_to_subfolder(new_path, "text")
             notify_user("Text file processed and renamed")
         except Exception as e:
@@ -330,26 +367,42 @@ class FileHandler(FileSystemEventHandler):
             print(f"Unsupported file type: {filepath.name}")
             mark_as_failed(filepath)
 
-def generate_filename_from_text(text: str, model: str) -> str:
+def generate_filename_and_category_from_text(text: str, model: str, allowed_categories: list[str], prompt_extra: str = "") -> tuple[str, str]:
     """
-    Uses OpenAI's API to generate a short, descriptive filename based on provided text.
-    The filename consists of up to 10 lowercase words with no punctuation between words,
-    followed by a single underscore and a category keyword (e.g. article, report, receipt, form, calendar, letter, invoice, contract, whitepaper, memo, transcript, draft).
+    Uses OpenAI's API to generate a short, descriptive filename and a category based on provided text.
+    Returns (description, category). Only categories from allowed_categories are valid.
     """
+    allowed_str = ', '.join(allowed_categories)
+    system_prompt = (
+        f"You are a helpful assistant that generates short, descriptive filenames and a category label based on provided file content. "
+        f"Return ONLY a JSON object with two fields: 'description' (up to 10 lowercase words, no punctuation, no underscores, no file extension) and 'category' (one of: {allowed_str}). "
+        f"The 'description' will be used as the filename (with a timestamp), and the 'category' will be used as a Finder tag (not in the filename). "
+        f"If the content does not fit any category, use 'Other'. "
+        f"Example: {{\"description\": \"product configuration in construction patrik jensen\", \"category\": \"Report\"}} (filename: product configuration in construction patrik jensen_2025-07-19_13.05.10.pdf, tag: Report)"
+    )
+    if prompt_extra:
+        system_prompt += " " + prompt_extra
     messages = [
-        {"role": "system", "content": (
-            "You are a helpful assistant that generates short, descriptive filenames based on provided file content. Return a short, descriptive filename using up to 10 lowercase words with no punctuation between words, followed by a single underscore and a category keyword (e.g. article, report, receipt, form, calendar, letter, invoice, contract, whitepaper, memo, transcript, draft). Do not include file extensions. If applicable, prioritize including key identifiers such as paper titles, author names, organizations (e.g. McKinsey, Ministry of Housing, Columbia University), or publication dates.\n\nExample: product configuration in construction patrik jensen_article\nExample: 2024 housing policy report uk government_report\nExample: nordvpn 2 year subscription receipt_2023-01-21_16.50.06.pdf"
-        )},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": text},
     ]
     response = client.chat.completions.create(
         model=model,
-        messages=messages,
-        max_tokens=50,
+        messages=messages,  # type: ignore
+        max_tokens=80,
         temperature=0.2,
         n=1,
     )
-    return response.choices[0].message.content.strip()
+    import json
+    try:
+        result = json.loads((response.choices[0].message.content or '').strip())
+        description = (result.get('description') or '').lower().replace('_', ' ').strip()
+        category = (result.get('category') or 'Other').strip()
+    except Exception:
+        # fallback: use all as description, category Other
+        description = (response.choices[0].message.content or '').strip().lower().replace('_', ' ').strip()
+        category = 'Other'
+    return description, category
 
 def get_file_datetime_string(file_path: Path) -> str:
     """
@@ -391,7 +444,7 @@ if __name__ == "__main__":
                         break
             file_queue.join()
 
-        file_queue.put(None)  # Signal the worker thread to exit
+        file_queue.put(None)  # type: ignore  # Signal the worker thread to exit
 
     except Exception as e:
         print(f"Batch processing failed: {e}")
