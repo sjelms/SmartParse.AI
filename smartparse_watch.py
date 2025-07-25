@@ -68,6 +68,9 @@ TEXT_EXTENSIONS = {
     ".txt", ".md", ".csv", ".html", ".htm", ".xhtml"
 }
 PDF_EXTENSION = ".pdf"
+OFFICE_EXTENSIONS = {
+    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"
+}
 
 # Max files to queue for processing at a time
 MAX_QUEUE_SIZE = 20
@@ -309,14 +312,40 @@ class FileHandler(FileSystemEventHandler):
         """
         Processes text files by reading their content, generating a descriptive filename and Finder tag,
         renaming, and moving them to the 'text' subfolder.
-        Supports plain text and HTML files.
+        Supports plain text, HTML, and Microsoft Office files.
         """
         ext = filepath.suffix.lower()
         try:
+            text = ""
             if ext in {".html", ".htm", ".xhtml"}:
                 with open(filepath, "r", encoding="utf-8") as f:
                     soup = BeautifulSoup(f, "html.parser")
                     text = soup.get_text(separator=' ', strip=True)
+            elif ext == ".docx":
+                from docx import Document  # type: ignore
+                doc = Document(filepath)
+                text = '\n'.join([para.text for para in doc.paragraphs])
+            elif ext == ".xlsx":
+                import openpyxl
+                wb = openpyxl.load_workbook(filepath, data_only=True)
+                lines = []
+                for sheet in wb.worksheets:
+                    for row in sheet.iter_rows(values_only=True):
+                        lines.append(' '.join([str(cell) if cell is not None else '' for cell in row]))
+                text = '\n'.join(lines)
+            elif ext == ".pptx":
+                from pptx import Presentation  # type: ignore
+                prs = Presentation(filepath)
+                lines = []
+                for slide in prs.slides:
+                    for shape in slide.shapes:
+                        if hasattr(shape, "text"):
+                            lines.append(shape.text)
+                text = '\n'.join(lines)
+            elif ext in {".doc", ".xls", ".ppt"}:
+                print(f"Legacy Office format not supported for text extraction: {filepath}")
+                mark_as_failed(filepath)
+                return
             else:
                 with open(filepath, "r", encoding="utf-8") as f:
                     text = f.read()
@@ -361,7 +390,7 @@ class FileHandler(FileSystemEventHandler):
             self.process_pdf(filepath)
         elif ext in IMAGE_EXTENSIONS:
             self.process_image(filepath)
-        elif ext in TEXT_EXTENSIONS:
+        elif ext in TEXT_EXTENSIONS or ext in OFFICE_EXTENSIONS:
             self.process_textfile(filepath)
         else:
             print(f"Unsupported file type: {filepath.name}")
@@ -419,9 +448,80 @@ def get_file_datetime_string(file_path: Path) -> str:
     # Format the timestamp to 'YYYY-MM-DD_HH.MM.SS'
     return time.strftime("%Y-%m-%d_%H.%M.%S", time.localtime(timestamp))
 
+def show_final_dialog(success_count, issue_count, fail_count, image_count, pdf_count, text_count, elapsed_sec):
+    import subprocess
+    time_min = int(elapsed_sec // 60)
+    time_sec = int(elapsed_sec % 60)
+    time_str = f"{time_min}m {time_sec}s" if time_min else f"{time_sec}s"
+    applescript = f'''
+    display dialog "SmartParse.AI Batch Summary
+
+    ✅ Files processed successfully: {success_count}
+    ⚠️ Files with issues: {issue_count}
+    ❌ Files failed: {fail_count}
+
+    🖼️ Images: {image_count}
+    📄 PDFs: {pdf_count}
+    📝 Text: {text_count}
+
+    🕒 Time elapsed: {time_str}
+    " buttons {{"OK"}} default button "OK" with title "SmartParse.AI"
+    '''
+    subprocess.run(['osascript', '-e', applescript])
+
 # Main execution block to start the folder watcher
 if __name__ == "__main__":
     print(f"Running SmartParse.AI batch processor on: {WATCH_DIR}")
+
+    import time as _time
+    start_time = _time.time()
+
+    # In-memory stats for this batch only
+    batch_stats = {
+        'image_count': 0,
+        'pdf_count': 0,
+        'text_count': 0,
+        'fail_count': 0,
+    }
+
+    # Patch FileHandler to update batch_stats
+    orig_process_image = FileHandler.process_image
+    orig_process_pdf = FileHandler.process_pdf
+    orig_process_textfile = FileHandler.process_textfile
+    orig_mark_as_failed = mark_as_failed
+
+    def patched_process_image(self, filepath):
+        try:
+            orig_process_image(self, filepath)
+            if not filepath.name.startswith("failed_"):
+                batch_stats['image_count'] += 1
+        except Exception:
+            batch_stats['fail_count'] += 1
+            raise
+    def patched_process_pdf(self, filepath):
+        try:
+            orig_process_pdf(self, filepath)
+            if not filepath.name.startswith("failed_"):
+                batch_stats['pdf_count'] += 1
+        except Exception:
+            batch_stats['fail_count'] += 1
+            raise
+    def patched_process_textfile(self, filepath):
+        try:
+            orig_process_textfile(self, filepath)
+            if not filepath.name.startswith("failed_"):
+                batch_stats['text_count'] += 1
+        except Exception:
+            batch_stats['fail_count'] += 1
+            raise
+    def patched_mark_as_failed(filepath):
+        batch_stats['fail_count'] += 1
+        return orig_mark_as_failed(filepath)
+
+    FileHandler.process_image = patched_process_image
+    FileHandler.process_pdf = patched_process_pdf
+    FileHandler.process_textfile = patched_process_textfile
+    mark_as_failed = patched_mark_as_failed
 
     try:
         files_remaining = True
@@ -443,6 +543,17 @@ if __name__ == "__main__":
                         print(f"Queue full. Pausing before next refill...")
                         break
             file_queue.join()
+
+        # Only show stats for this batch
+        success_count = batch_stats['image_count'] + batch_stats['pdf_count'] + batch_stats['text_count']
+        issue_count = 0  # Can be expanded if you want to track partials
+        fail_count = batch_stats['fail_count']
+        image_count = batch_stats['image_count']
+        pdf_count = batch_stats['pdf_count']
+        text_count = batch_stats['text_count']
+        elapsed_sec = int(_time.time() - start_time)
+
+        show_final_dialog(success_count, issue_count, fail_count, image_count, pdf_count, text_count, elapsed_sec)
 
         file_queue.put(None)  # type: ignore  # Signal the worker thread to exit
 
