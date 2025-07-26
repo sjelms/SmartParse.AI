@@ -1,6 +1,6 @@
 # SmartParse.AI
 
-SmartParse.AI is an intelligent file renaming and organization tool for macOS. It uses AI to generate meaningful filenames for PDFs, images, and text files based on their content, then sorts them into subfolders automatically.
+SmartParse.AI is an intelligent file renaming and organization tool for macOS. It uses AI to generate meaningful filenames for PDFs, images, and text files based on their content, then sorts them into subfolders automatically and assigns Finder tags.
 
 ---
 
@@ -19,7 +19,7 @@ Requires: Python 3.13, and the script path inside the workflow may need to be up
 
 ## 📌 Intent
 
-SmartParse.AI aims to automate the renaming of files using AI-generated content summaries and timestamps, while keeping your files organized. It is particularly useful for managing screenshots, academic PDFs, meeting notes, and other content-rich files.
+SmartParse.AI aims to automate the renaming of files using AI-generated content summaries and timestamps, while keeping your files organized with intelligent Finder tagging. It is particularly useful for managing screenshots, academic PDFs, meeting notes, and other content-rich files.
 
 It is designed to be lightweight and non-intrusive, running only when triggered manually via a macOS right-click Finder action.
 
@@ -32,7 +32,9 @@ It is designed to be lightweight and non-intrusive, running only when triggered 
 - Routes each file to a specific AI model based on type.
 - Extracts metadata or content to generate a new filename.
 - Renames and moves the file to an appropriate subfolder (`images`, `pdfs`, `text`).
-- Sends macOS notifications when processing is complete or if a file fails.
+- Assigns Finder tags based on content type and file category.
+- Shows a persistent dialog with batch processing summary.
+- Logs all operations to a JSON file for troubleshooting and auditing.
 - Optional automation via macOS Automator workflow (included) enables on-demand use without needing Terminal.
 - Processes files in safe batches (default: 20), continuing automatically until the folder is empty.
 - Includes race condition check to ensure large files are fully written before processing.
@@ -43,23 +45,29 @@ It is designed to be lightweight and non-intrusive, running only when triggered 
 
 - Drop any supported file type into the `SmartParseWatch` folder.
 - Supported formats:
-  - Images: `.jpg`, `.jpeg`, `.png`, `.webp`, `.heic`, `.heif`, `.gif`, `.bmp`, `.tiff`, `.tif`
-  - PDFs: `.pdf`
-  - Text files: `.txt`, `.md`, `.csv`, `.html`, `.htm`, `.xhtml`
+  - **Images:** `.jpg`, `.jpeg`, `.png`, `.webp`, `.heic`, `.heif`, `.gif`, `.bmp`, `.tiff`, `.tif`
+  - **PDFs:** `.pdf`
+  - **Text files:** `.txt`, `.md`, `.csv`, `.html`, `.htm`, `.xhtml`
+  - **Microsoft Office:** `.docx`, `.xlsx`, `.pptx` (legacy formats `.doc`, `.xls`, `.ppt` are marked as failed)
 
 ---
 
 ## 📤 Output
 
 - Files are renamed to:  
-  `descriptive text keyword_YYYY-MM-DD_HH.MM.SS.ext`
+  `descriptive text_YYYY-MM-DD_HH.MM.SS.ext`
 
-  - The filename contains a natural-language description (up to 10 lowercase words) with no punctuation, followed by a single underscore and a category keyword (e.g. quote, article, receipt, cartoon, diagram).
-  - Category is inferred from file type and content.
+  - The filename contains a natural-language description (7-10 lowercase words) with no punctuation, followed by a timestamp.
+  - Category is assigned as a Finder tag (not in the filename).
+
+- **Finder Tags by File Type:**
+  - **PDFs:** Tags (e.g., "Academic Paper", "Receipt", "Report")
+  - **Images:** Tags (e.g., "Photo", "Screenshot", "Diagram")
+  - **Text:** Tags (e.g., "Notes", "Draft", "Transcript")
 
 - Example:
-  - `smartphone_schematic_diagram_2025-07-19_14.22.03.png`
-  - `modular_housing_case_study_2025-07-19_13.05.10.pdf`
+  - `product configuration in construction patrik jensen_2025-07-19_13.05.10.pdf` (tagged: "Academic Paper")
+  - `smartphone schematic diagram technical specifications_2025-07-19_14.22.03.png` (tagged: "Diagram")
 - If a file cannot be processed, it is renamed with a `failed_` prefix and left in the watch folder.
 
 ---
@@ -69,8 +77,9 @@ It is designed to be lightweight and non-intrusive, running only when triggered 
 - **Python 3.13.5**
 - **OpenAI API** (gpt-3.5-turbo and gpt-4o)
 - **PyMuPDF** for PDF processing
-- **BeautifulSoup4 + lxml**
-- **PyMuPDF** for metadata and visual text extraction in PDFs
+- **BeautifulSoup4 + lxml** for HTML parsing
+- **python-docx, openpyxl, python-pptx** for Microsoft Office files
+- **macos-tags** for Finder tag management
 - **macOS Automator** integration via Quick Action workflow
 - **Race condition handling** for stable file readiness before processing
 - **watchdog** for file system monitoring
@@ -81,7 +90,7 @@ It is designed to be lightweight and non-intrusive, running only when triggered 
 ## 🛠️ Troubleshooting
 
 - **Files not renamed?** Check if the file type is supported and readable. Failed files are prefixed with `failed_`.
-- **Notifications not appearing?** Ensure Terminal has notification permission in System Settings > Notifications.
+- **Tags not appearing?** Ensure the script has permission to modify Finder tags. New tags should appear in Finder.
 - **Queue stuck or lagging?** Limit drops to under 5 files at once. Use `MAX_QUEUE_SIZE` in the script to adjust.
 - **OpenAI errors?** Confirm that your `.env` file contains a valid API key:  
   `OPENAI_API_KEY=your-key-here`
@@ -91,12 +100,20 @@ It is designed to be lightweight and non-intrusive, running only when triggered 
       ```sh
       # Activate your virtual environment and run the script
       source ~/python-venv/bin/activate  # Ensures all required packages are available
-      python3 /Users/stephenelms/Dev/SmartParse.AI/smartparse_watch.py
+      python3 **`/path/to/your/SmartParse.AI/smartparse_watch.py`**
       ```
       # Or, run directly with the venv's Python interpreter (recommended for Automator):
-      ~/python-venv/bin/python /Users/stephenelms/Dev/SmartParse.AI/smartparse_watch.py
+      ~/python-venv/bin/python **`/path/to/your/SmartParse.AI/smartparse_watch.py`**
       ```
     - This ensures the script uses the correct environment and all installed packages.
+- **Dialog not appearing?** The summary dialog appears after all files are processed. Check that the script completed successfully.
+- **Log files?** Check `logs/smartparse_log.jsonl` for detailed operation history and troubleshooting.
 - **Still stuck?** Check the Terminal for error logs or debug messages printed during execution.
 
 ---
+
+## 🚀 Roadmap & Future Features
+
+- **Colored Finder Tags:** Enhanced tag system with automatic color coding (PDFs: Red, Images: Yellow, Text: Blue)
+- **Batch Processing Improvements:** Better handling of large file drops and progress indicators
+- **Custom Tag Categories:** User-configurable tag categories and naming conventions
