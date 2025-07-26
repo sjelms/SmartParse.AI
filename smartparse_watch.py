@@ -76,6 +76,29 @@ OFFICE_EXTENSIONS = {
 MAX_QUEUE_SIZE = 20
 file_queue: queue.Queue[Optional[Path]] = queue.Queue(maxsize=MAX_QUEUE_SIZE)
 
+import json
+LOG_DIR = Path(__file__).parent / "logs"
+LOG_FILE = LOG_DIR / "smartparse_log.jsonl"
+
+# Ensure log directory exists
+def ensure_log_dir():
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+# Log operation
+def log_file_operation(original_path, new_path, file_type, tag, status, error=None):
+    ensure_log_dir()
+    entry = {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+        "original_filename": str(original_path),
+        "new_filename": str(new_path) if new_path else None,
+        "file_type": file_type,
+        "tag": tag,
+        "status": status,
+        "error": error,
+    }
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+
 def notify_user(message: str, title: str = "SmartParse.AI", sound: str = "default") -> None:
     """
     Sends a user notification if possible. Falls back to print if no GUI notifier is available.
@@ -215,8 +238,8 @@ class FileHandler(FileSystemEventHandler):
                     "content": (
                         "You are a helpful assistant that generates short, descriptive filenames and a category label based on the visual and textual content of an image. "
                         "If text is present, extract key themes, names, or messages. "
-                        "The filename must consist of up to 10 lowercase words, no punctuation, no underscores, no file extension. "
-                        "Return ONLY a JSON object with two fields: 'description' (up to 10 lowercase words, no punctuation, no underscores, no file extension) and 'category' (one of: Quote, Sign, Cartoon, Meme, Photo, Illustration, Diagram, Screenshot, Logo, Map, Chart/Graph). "
+                        "The filename must consist of between 7 and 10 lowercase words, no punctuation, no underscores, no file extension. Be as descriptive as possible within this range. "
+                        "Return ONLY a JSON object with two fields: 'description' (between 7 and 10 lowercase words, no punctuation, no underscores, no file extension, be as descriptive as possible within this range) and 'category' (one of: Quote, Sign, Cartoon, Meme, Photo, Illustration, Diagram, Screenshot, Logo, Map, Chart/Graph). "
                         "The 'description' will be used as the filename (with a timestamp), and the 'category' will be used as a Finder tag (not in the filename). "
                         "If the content does not fit any category, use 'Other'. "
                         "Example: {\"description\": \"dog riding skateboard\", \"category\": \"Photo\"} (filename: dog riding skateboard_2025-07-19_14.22.03.png, tag: Photo)"
@@ -241,7 +264,6 @@ class FileHandler(FileSystemEventHandler):
                 temperature=0.2,
                 n=1,
             )
-            import json
             try:
                 result = json.loads((response.choices[0].message.content or '').strip())
                 description = (result.get('description') or '').lower().replace('_', ' ').strip()
@@ -249,20 +271,31 @@ class FileHandler(FileSystemEventHandler):
                 if not isinstance(category, str):
                     category = str(category)
                 category = (category or '').strip()
+                # Validate description: must be non-empty, no curly braces, no slashes, reasonable length
+                if not description or any(c in description for c in '{}[]/\\') or len(description) > 80:
+                    print(f"Invalid description from AI: {description}. Marking as failed.")
+                    log_file_operation(filepath, None, "image", None, "fail", error="Invalid description from AI")
+                    mark_as_failed(filepath)
+                    return
             except Exception:
-                description = (response.choices[0].message.content or '').strip().lower().replace('_', ' ').strip()
-                category = 'Other'
+                print(f"Failed to parse AI response as JSON for {filepath}. Marking as failed.")
+                log_file_operation(filepath, None, "image", None, "fail", error="Failed to parse AI response as JSON")
+                mark_as_failed(filepath)
+                return
             timestamp = get_file_datetime_string(filepath)
             new_name = f"{description}_{timestamp}{filepath.suffix.lower()}"
             new_path = filepath.with_name(new_name)
             filepath.rename(new_path)
             print(f"Renamed image to: {new_path}")
-            tag = Tag(name=category, color=Color.YELLOW)
+            # Use string method to set tag color for new tags
+            tag = f"{category}\n{Color.YELLOW}"
             set_all([tag], file=str(new_path))  # Use set_all to ensure color is applied
             moved_path = move_file_to_subfolder(new_path, "images")
             notify_user("Image processed and renamed")
+            log_file_operation(filepath, new_path, "image", category, "success")
         except Exception as e:
             print(f"Error processing image file {filepath}: {e}")
+            log_file_operation(filepath, None, "image", None, "fail", error=str(e))
             mark_as_failed(filepath)
 
     def process_pdf(self, filepath: Path) -> None:
@@ -284,6 +317,7 @@ class FileHandler(FileSystemEventHandler):
                 text = ""
             if not text:
                 print(f"PDF {filepath} has no extractable text. Marking as failed.")
+                log_file_operation(filepath, None, "pdf", None, "fail", error="No extractable text")
                 mark_as_failed(filepath)
                 return
             allowed_categories = [
@@ -293,19 +327,22 @@ class FileHandler(FileSystemEventHandler):
                 text,
                 model=MODEL_PDF,
                 allowed_categories=allowed_categories,
-                prompt_extra="Prioritize including key identifiers such as paper titles, author names, organizations (e.g. McKinsey, Ministry of Housing, Columbia University), or publication dates. The filename must consist of up to 10 lowercase words, no punctuation, no underscores, no file extension."
+                prompt_extra="Prioritize including key identifiers such as paper titles, author names, organizations (e.g. McKinsey, Ministry of Housing, Columbia University), or publication dates. The filename must consist of between 7 and 10 lowercase words, no punctuation, no underscores, no file extension. Be as descriptive as possible within this range."
             )
             timestamp = get_file_datetime_string(filepath)
             new_name = f"{description}_{timestamp}{filepath.suffix.lower()}"
             new_path = filepath.with_name(new_name)
             filepath.rename(new_path)
             print(f"Renamed PDF to: {new_path}")
-            tag = Tag(name=category, color=Color.RED)
+            # Use string method to set tag color for new tags
+            tag = f"{category}\n{Color.RED}"
             set_all([tag], file=str(new_path))  # Use set_all to ensure color is applied
             moved_path = move_file_to_subfolder(new_path, "pdfs")
             notify_user("PDF processed and renamed")
+            log_file_operation(filepath, new_path, "pdf", category, "success")
         except Exception as e:
             print(f"Error processing PDF file {filepath}: {e}")
+            log_file_operation(filepath, None, "pdf", None, "fail", error=str(e))
             mark_as_failed(filepath)
 
     def process_textfile(self, filepath: Path) -> None:
@@ -351,6 +388,7 @@ class FileHandler(FileSystemEventHandler):
                     text = f.read()
             if not text.strip():
                 print(f"Text file {filepath} has insufficient content. Marking as failed.")
+                log_file_operation(filepath, None, "text", None, "fail", error="Insufficient content")
                 mark_as_failed(filepath)
                 return
             allowed_categories = [
@@ -361,7 +399,7 @@ class FileHandler(FileSystemEventHandler):
                 model=MODEL_TEXT,
                 allowed_categories=allowed_categories,
                 prompt_extra=(
-                    "The filename must consist of up to 10 lowercase words, no punctuation, no underscores, no file extension. "
+                    "The filename must consist of between 7 and 10 lowercase words, no punctuation, no underscores, no file extension. Be as descriptive as possible within this range. "
                     "Choose the most specific and accurate category from the list based on the content. "
                     "Do not default to 'Correspondence' unless the file is truly a letter, email, or message. "
                     "If the file is a transcript of a conversation, interview, or meeting, use 'Transcript'. "
@@ -373,12 +411,15 @@ class FileHandler(FileSystemEventHandler):
             new_path = filepath.with_name(new_name)
             filepath.rename(new_path)
             print(f"Renamed file to: {new_path}")
-            tag = Tag(name=category, color=Color.BLUE)
+            # Use string method to set tag color for new tags
+            tag = f"{category}\n{Color.BLUE}"
             set_all([tag], file=str(new_path))  # Use set_all to ensure color is applied
             moved_path = move_file_to_subfolder(new_path, "text")
             notify_user("Text file processed and renamed")
+            log_file_operation(filepath, new_path, "text", category, "success")
         except Exception as e:
             print(f"Error processing text file {filepath}: {e}")
+            log_file_operation(filepath, None, "text", None, "fail", error=str(e))
             mark_as_failed(filepath)
 
     def handle_file(self, filepath: Path) -> None:
@@ -394,6 +435,7 @@ class FileHandler(FileSystemEventHandler):
             self.process_textfile(filepath)
         else:
             print(f"Unsupported file type: {filepath.name}")
+            log_file_operation(filepath, None, "unknown", None, "fail", error="Unsupported file type")
             mark_as_failed(filepath)
 
 def generate_filename_and_category_from_text(text: str, model: str, allowed_categories: list[str], prompt_extra: str = "") -> tuple[str, str]:
@@ -404,7 +446,7 @@ def generate_filename_and_category_from_text(text: str, model: str, allowed_cate
     allowed_str = ', '.join(allowed_categories)
     system_prompt = (
         f"You are a helpful assistant that generates short, descriptive filenames and a category label based on provided file content. "
-        f"Return ONLY a JSON object with two fields: 'description' (up to 10 lowercase words, no punctuation, no underscores, no file extension) and 'category' (one of: {allowed_str}). "
+        f"Return ONLY a JSON object with two fields: 'description' (between 7 and 10 lowercase words, no punctuation, no underscores, no file extension, be as descriptive as possible within this range) and 'category' (one of: {allowed_str}). "
         f"The 'description' will be used as the filename (with a timestamp), and the 'category' will be used as a Finder tag (not in the filename). "
         f"If the content does not fit any category, use 'Other'. "
         f"Example: {{\"description\": \"product configuration in construction patrik jensen\", \"category\": \"Report\"}} (filename: product configuration in construction patrik jensen_2025-07-19_13.05.10.pdf, tag: Report)"
