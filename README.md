@@ -57,18 +57,25 @@ It is designed to be lightweight and non-intrusive, running only when triggered 
 - Files are renamed to:  
   `descriptive text_YYYY-MM-DD_HH.MM.SS.ext`
 
-  - The filename contains a natural-language description (7-10 lowercase words) with no punctuation, followed by a timestamp.
+  - The description is lowercased natural language with no punctuation, followed by a timestamp.
+  - Image filenames are longer for better searchability.
   - Category is assigned as a Finder tag (not in the filename).
+
+- **Description Length by File Type:**
+  - **Images:** 10–12 words by default. If the image contains visible text, the filename can extend up to 16 words to capture key text and sentiment.
+  - **PDFs:** 7–10 words.
+  - **Text/Office:** 7–10 words.
 
 - **Finder Tags by File Type:**
   - **PDFs:** Tags (e.g., "Academic Paper", "Receipt", "Report")
   - **Images:** Tags (e.g., "Photo", "Screenshot", "Diagram")
   - **Text:** Tags (e.g., "Notes", "Draft", "Transcript")
 
-- Example:
+- Examples:
   - `product configuration in construction patrik jensen_2025-07-19_13.05.10.pdf` (tagged: "Academic Paper")
-  - `smartphone schematic diagram technical specifications_2025-07-19_14.22.03.png` (tagged: "Diagram")
-- If a file cannot be processed, it is renamed with a `failed_` prefix and left in the watch folder.
+  - `smartphone schematic diagram technical specifications with labeled components_2025-07-19_14.22.03.png` (tagged: "Diagram")
+  - `event banner read join us today community cleanup saturday 10am_2025-07-19_15.40.12.png` (image with text; tagged: "Sign")
+  - If a file cannot be processed, it is renamed with a `failed_` prefix and left in the watch folder.
 
 ---
 

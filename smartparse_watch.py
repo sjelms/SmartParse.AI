@@ -236,13 +236,14 @@ class FileHandler(FileSystemEventHandler):
                 {
                     "role": "system",
                     "content": (
-                        "You are a helpful assistant that generates short, descriptive filenames and a category label based on the visual and textual content of an image. "
-                        "If text is present, extract key themes, names, or messages. "
-                        "The filename must consist of between 7 and 10 lowercase words, no punctuation, no underscores, no file extension. Be as descriptive as possible within this range. "
-                        "Return ONLY a JSON object with two fields: 'description' (between 7 and 10 lowercase words, no punctuation, no underscores, no file extension, be as descriptive as possible within this range) and 'category' (one of: Quote, Sign, Cartoon, Meme, Photo, Illustration, Diagram, Screenshot, Logo, Map, Chart/Graph). "
+                        "You are a helpful assistant that generates descriptive, searchable filenames and a category label based on the visual and textual content of an image. "
+                        "Detect whether the image contains visible text. If text is present, extract key phrases and any clear sentiment or tone (e.g., urgent, humorous, inspirational) and incorporate them succinctly. "
+                        "By default, the filename must consist of 10 to 12 lowercase words, no punctuation, no underscores, no file extension. If the image contains text, you may use up to 16 lowercase words to capture key text and sentiment. Be concise but informative. "
+                        "Return ONLY a JSON object with two fields: 'description' (10–12 lowercase words, or up to 16 if the image contains text; no punctuation, no underscores, no file extension) and 'category' (one of: Quote, Sign, Cartoon, Meme, Photo, Illustration, Diagram, Screenshot, Logo, Map, Chart/Graph). "
                         "The 'description' will be used as the filename (with a timestamp), and the 'category' will be used as a Finder tag (not in the filename). "
                         "If the content does not fit any category, use 'Other'. "
-                        "Example: {\"description\": \"dog riding skateboard\", \"category\": \"Photo\"} (filename: dog riding skateboard_2025-07-19_14.22.03.png, tag: Photo)"
+                        "Example without text: {\"description\": \"golden retriever surfing ocean wave at sunset\", \"category\": \"Photo\"} "
+                        "Example with text: {\"description\": \"conference badge speaker anna lee ai ethics keynote optimistic\", \"category\": \"Screenshot\"}"
                     ),
                 },
                 {
@@ -271,8 +272,8 @@ class FileHandler(FileSystemEventHandler):
                 if not isinstance(category, str):
                     category = str(category)
                 category = (category or '').strip()
-                # Validate description: must be non-empty, no curly braces, no slashes, reasonable length
-                if not description or any(c in description for c in '{}[]/\\') or len(description) > 80:
+                # Validate description: non-empty, no braces/slashes, and not excessively long
+                if not description or any(c in description for c in '{}[]/\\') or len(description) > 160:
                     print(f"Invalid description from AI: {description}. Marking as failed.")
                     log_file_operation(filepath, None, "image", None, "fail", error="Invalid description from AI")
                     mark_as_failed(filepath)
