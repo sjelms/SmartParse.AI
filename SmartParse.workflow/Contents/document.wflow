@@ -58,10 +58,66 @@
 				<string>Run Shell Script</string>
 				<key>ActionParameters</key>
 				<dict>
-					<key>COMMAND_STRING</key>
-					<string>cd ~/Dev/SmartParse.AI
-source .venv/bin/activate
-/Users/stephenelms/Dev/SmartParse.AI/.venv/bin/python /Users/stephenelms/Dev/SmartParse.AI/smartparse_watch.py "$@"</string>
+				<key>COMMAND_STRING</key>
+				<string>set -e
+
+CONFIG_CANDIDATES=(
+  "$SMARTPARSE_CONFIG"
+  "$HOME/.config/smartparse/config.yaml"
+)
+
+CONFIG_FILE=""
+
+for candidate in "${CONFIG_CANDIDATES[@]}"; do
+  [ -n "$candidate" ] || continue
+  candidate="${candidate/#\~/$HOME}"
+  if [ -f "$candidate" ]; then
+    CONFIG_FILE="$candidate"
+    break
+  fi
+done
+
+if [ -z "$CONFIG_FILE" ]; then
+  echo "SmartParse config not found. Set SMARTPARSE_CONFIG or create ~/.config/smartparse/config.yaml" &gt;&amp;2
+  exit 1
+fi
+
+eval "$(/usr/bin/python3 - "$CONFIG_FILE" &lt;&lt;'PY'
+import os, sys, pathlib, shlex
+
+config_path = pathlib.Path(sys.argv[1])
+data = {}
+for raw_line in config_path.read_text(encoding='utf-8').splitlines():
+    line = raw_line.split('#', 1)[0].strip()
+    if not line or ':' not in line:
+        continue
+    k, v = line.split(':', 1)
+    data[k.strip()] = v.strip()
+
+def normalize(key):
+    if key not in data:
+        raise SystemExit(f"Missing '{key}' in {config_path}")
+    value = data[key].strip()
+    if value and value[0] == value[-1] and value[0] in ('"', '\''):
+        value = value[1:-1]
+    value = os.path.expandvars(value)
+    value = os.path.expanduser(value)
+    if not os.path.isabs(value):
+        value = os.path.abspath(os.path.join(config_path.parent, value))
+    return value
+
+python_exec = normalize('python_executable')
+script_path = normalize('smartparse_script')
+print(f"PYTHON_EXEC={shlex.quote(python_exec)}")
+print(f"SMARTPARSE_SCRIPT={shlex.quote(script_path)}")
+PY
+)"
+
+SCRIPT_DIR="$(dirname "$SMARTPARSE_SCRIPT")"
+cd "$SCRIPT_DIR"
+
+"$PYTHON_EXEC" "$SMARTPARSE_SCRIPT" "$@"
+</string>
 					<key>CheckedForUserDefaultShell</key>
 					<true/>
 					<key>inputMethod</key>

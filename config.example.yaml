@@ -1,0 +1,6 @@
+# Copy this file to config.yaml and update the values for your machine.
+# Paths can be absolute or use ~ for your home directory.
+python_executable: "/absolute/path/to/your/venv/bin/python"
+smartparse_script: "/absolute/path/to/this/repo/smartparse_watch.py"
+watch_directory: "/absolute/path/Documents/SmartParseWatch"
+logs_dir: "./logs"

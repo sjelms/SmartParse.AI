@@ -9,13 +9,33 @@ SmartParse.AI is an intelligent file renaming and organization tool for macOS. I
 To enable the right-click Finder action for SmartParse.AI:
 
 1. Download or clone this repo.
-2. Open the `SmartParse.workflow` file.
-3. Double-click it to install into Automator.
-4. Once added, right-click the `SmartParseWatch` folder in Finder and choose `Quick Actions → Run SmartParse.AI`.
+2. Copy `config.example.yaml` to `config.yaml` and update the values (see the configuration guide below).
+3. Install the Quick Action by double-clicking `SmartParse.workflow`.
+4. After editing `config.yaml`, copy it to `~/.config/smartparse/config.yaml` (or set the `SMARTPARSE_CONFIG` environment variable) so the Quick Action can resolve your paths.
+5. Right-click the `SmartParseWatch` folder in Finder and choose `Quick Actions → Run SmartParse.AI`.
 
-This will run the script in batch mode, renaming and organizing all files in the watch folder.
+The Automator workflow reads the Python interpreter, script path, and optional overrides from the config file at runtime; no personal paths are baked into the workflow bundle.
 
-Requires: Python 3.13, and the script path inside the workflow may need to be updated depending on your local setup.
+Requires: Python 3.13 (or compatible), with dependencies installed in the interpreter pointed to by your config.
+
+---
+
+## ⚙️ Configuration
+
+1. Copy `config.example.yaml` → `config.yaml` in the project root.
+2. Update the placeholders:
+   - `python_executable`: the interpreter (typically the `python` inside your virtual environment).
+   - `smartparse_script`: full path to `smartparse_watch.py` (can be relative to the config file).
+   - `watch_directory` *(optional)*: folder SmartParse should monitor when no CLI argument is provided.
+   - `logs_dir` *(optional)*: directory where SmartParse should emit log files.
+3. Keep `config.yaml` out of version control (already ignored) and copy it to `~/.config/smartparse/config.yaml` for the macOS Quick Action. Alternatively, set the `SMARTPARSE_CONFIG` environment variable to point to your preferred location before launching the workflow or script.
+
+The Python script and Automator workflow look for the config file in this order:
+1. Path defined by `$SMARTPARSE_CONFIG`
+2. `config.yaml` located next to `smartparse_watch.py`
+3. `~/.config/smartparse/config.yaml`
+
+This allows you to keep the canonical config in the repo while providing runtime access for scripts and macOS automation.
 
 ## 📌 Intent
 
@@ -34,7 +54,7 @@ It is designed to be lightweight and non-intrusive, running only when triggered 
 - Renames and moves the file to an appropriate subfolder (`images`, `pdfs`, `text`).
 - Assigns Finder tags based on content type and file category.
 - Shows a persistent dialog with batch processing summary.
-- Logs all operations to a JSON file for troubleshooting and auditing.
+- Logs all operations to timestamped JSONL files for troubleshooting and auditing.
 - Optional automation via macOS Automator workflow (included) enables on-demand use without needing Terminal.
 - Processes files in safe batches (default: 20), continuing automatically until the folder is empty.
 - Includes race condition check to ensure large files are fully written before processing.
@@ -114,7 +134,7 @@ It is designed to be lightweight and non-intrusive, running only when triggered 
       ```
     - This ensures the script uses the correct environment and all installed packages.
 - **Dialog not appearing?** The summary dialog appears after all files are processed. Check that the script completed successfully.
-- **Log files?** Check `logs/smartparse_log.jsonl` for detailed operation history and troubleshooting.
+- **Log files?** Each run produces `logs/smartparse_log_YYYY-MM-DD_HH-MM-SS.jsonl` (configurable via `logs_dir`).
 - **Still stuck?** Check the Terminal for error logs or debug messages printed during execution.
 
 ---

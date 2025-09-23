@@ -2,8 +2,17 @@
 # This script monitors a folder and its subfolders for new files (PDFs or images)
 # and routes them to appropriate processing functions.
 
+import base64
+import os
+import sys
+import threading
 import time
+from datetime import datetime
 from pathlib import Path
+from typing import Dict, Optional, Tuple
+
+import queue
+
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -11,11 +20,6 @@ from dotenv import load_dotenv
 import openai
 from bs4 import BeautifulSoup
 import fitz  # PyMuPDF
-import threading
-import queue
-import base64
-import sys
-from typing import Optional
 
 try:
     from pync import Notifier
@@ -39,7 +43,6 @@ except Exception:
 if not api_key:
     api_key = None
     try:
-        import os
         api_key = os.getenv("OPENAI_API_KEY")
     except Exception:
         api_key = None
@@ -54,10 +57,60 @@ MODEL_TEXT = "gpt-3.5-turbo"
 MODEL_PDF = "gpt-3.5-turbo"
 MODEL_IMAGE = "gpt-4o-2024-11-20"
 
+def _read_simple_config(path: Path) -> Dict[str, str]:
+    data: Dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        cleaned = value.strip()
+        if cleaned and cleaned[0] == cleaned[-1] and cleaned[0] in ('"', '\''):
+            cleaned = cleaned[1:-1]
+        data[key.strip()] = cleaned
+    return data
+
+
+def _expand_path(raw_value: str, base: Path) -> Path:
+    expanded = os.path.expandvars(raw_value)
+    expanded = os.path.expanduser(expanded)
+    candidate = Path(expanded)
+    if not candidate.is_absolute():
+        candidate = (base / candidate).resolve()
+    return candidate
+
+
+def _load_config() -> Tuple[Dict[str, str], Optional[Path]]:
+    search_candidates = []
+    env_path = os.getenv("SMARTPARSE_CONFIG")
+    if env_path:
+        search_candidates.append(Path(env_path).expanduser())
+    repo_config = Path(__file__).resolve().parent / "config.yaml"
+    search_candidates.append(repo_config)
+    home_config = Path.home() / ".config" / "smartparse" / "config.yaml"
+    search_candidates.append(home_config)
+
+    for candidate in search_candidates:
+        if candidate.is_file():
+            try:
+                return _read_simple_config(candidate), candidate
+            except Exception as exc:
+                print(f"Failed to read config {candidate}: {exc}", file=sys.stderr)
+    return {}, None
+
+
+CONFIG, CONFIG_PATH = _load_config()
+CONFIG_BASE = CONFIG_PATH.parent if CONFIG_PATH else Path(__file__).resolve().parent
+
+
 if len(sys.argv) > 1:
     WATCH_DIR = Path(sys.argv[1]).expanduser().resolve()
 else:
-    WATCH_DIR = Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs" / "Documents" / "SmartParseWatch"
+    watch_from_config = CONFIG.get("watch_directory")
+    if watch_from_config:
+        WATCH_DIR = _expand_path(watch_from_config, CONFIG_BASE)
+    else:
+        WATCH_DIR = Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs" / "Documents" / "SmartParseWatch"
 
 # File extensions grouped by type
 IMAGE_EXTENSIONS = {
@@ -74,11 +127,18 @@ OFFICE_EXTENSIONS = {
 
 # Max files to queue for processing at a time
 MAX_QUEUE_SIZE = 20
-file_queue: queue.Queue[Optional[Path]] = queue.Queue(maxsize=MAX_QUEUE_SIZE)
+file_queue: queue.Queue = queue.Queue(maxsize=MAX_QUEUE_SIZE)
 
 import json
-LOG_DIR = Path(__file__).parent / "logs"
-LOG_FILE = LOG_DIR / "smartparse_log.jsonl"
+
+logs_from_config = CONFIG.get("logs_dir")
+if logs_from_config:
+    LOG_DIR = _expand_path(logs_from_config, CONFIG_BASE)
+else:
+    LOG_DIR = Path(__file__).resolve().parent / "logs"
+
+RUN_ID = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+LOG_FILE = LOG_DIR / f"smartparse_log_{RUN_ID}.jsonl"
 
 # Ensure log directory exists
 def ensure_log_dir():
