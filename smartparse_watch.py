@@ -33,23 +33,42 @@ from macos_tags import add as add_finder_tag, Tag, Color, set_all  # type: ignor
 # Load environment variables from .env file
 load_dotenv()
 
-openai.api_key = None
-api_key = None
-try:
-    api_key = openai.api_key or None
-except Exception:
-    api_key = None
 
-if not api_key:
-    api_key = None
+def _resolve_api_key() -> str:
+    """Return a usable OpenAI API key or exit with an actionable message."""
+
+    candidate: Optional[str] = None
     try:
-        api_key = os.getenv("OPENAI_API_KEY")
+        candidate = openai.api_key or None  # type: ignore[attr-defined]
     except Exception:
-        api_key = None
+        candidate = None
 
-if not api_key:
-    raise RuntimeError("OPENAI_API_KEY environment variable not set")
+    if not candidate:
+        candidate = os.getenv("OPENAI_API_KEY")
 
+    if candidate:
+        candidate = candidate.strip()
+
+    if not candidate:
+        raise SystemExit(
+            "OPENAI_API_KEY is not set. Export it before starting SmartParse or run the command through `op run --env-file=.env -- ...`."
+        )
+
+    if candidate.startswith("op://"):
+        raise SystemExit(
+            "OPENAI_API_KEY resolves to a 1Password secret reference (op://...). Unlock 1Password (`op signin`) and launch SmartParse via `op run --env-file=.env -- ...` so the real key is available."
+        )
+
+    if candidate.lower().startswith("your-") or "api-key" in candidate.lower():
+        raise SystemExit(
+            "OPENAI_API_KEY is still set to a placeholder value. Replace it with your real OpenAI key before running SmartParse."
+        )
+
+    return candidate
+
+
+api_key = _resolve_api_key()
+openai.api_key = api_key
 client = openai.OpenAI(api_key=api_key)
 
 # Define which model to use for each type

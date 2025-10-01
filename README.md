@@ -121,6 +121,7 @@ It is designed to be lightweight and non-intrusive, running only when triggered 
 - **Queue stuck or lagging?** Limit drops to under 5 files at once. Use `MAX_QUEUE_SIZE` in the script to adjust.
 - **OpenAI errors?** Confirm that your `.env` file contains a valid API key:  
   `OPENAI_API_KEY=your-key-here`
+  - Storing the key in 1Password? Run SmartParse through `op run --env-file=.env -- ...` (or export the decrypted value first). The script now exits immediately if it only sees an `op://...` reference so you can unlock 1Password before processing files.
 - **ModuleNotFoundError for `macos_tags`?**
     - This means your script is not running in the correct Python virtual environment. You must activate your virtual environment before running the script, or use the full path to the Python interpreter in your venv.
     - **Example:**

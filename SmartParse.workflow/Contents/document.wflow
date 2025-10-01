@@ -114,6 +114,22 @@ PY
 )"
 
 SCRIPT_DIR="$(dirname "$SMARTPARSE_SCRIPT")"
+
+if [ ! -f "$SMARTPARSE_SCRIPT" ]; then
+  echo "smartparse_script $SMARTPARSE_SCRIPT is not a file. Update $CONFIG_FILE." &gt;&amp;2
+  exit 1
+fi
+
+if [ ! -x "$PYTHON_EXEC" ]; then
+  VENV_DIR="$(dirname "$(dirname "$PYTHON_EXEC")")"
+  if [ ! -d "$VENV_DIR" ]; then
+    echo "venvPath $VENV_DIR is not a valid directory. Update python_executable in $CONFIG_FILE." &gt;&amp;2
+  else
+    echo "python_executable $PYTHON_EXEC is not executable. Ensure your virtual environment is set up." &gt;&amp;2
+  fi
+  exit 1
+fi
+
 cd "$SCRIPT_DIR"
 
 "$PYTHON_EXEC" "$SMARTPARSE_SCRIPT" "$@"
