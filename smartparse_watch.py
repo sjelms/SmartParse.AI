@@ -4,6 +4,8 @@
 
 import base64
 import os
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -34,6 +36,51 @@ from macos_tags import add as add_finder_tag, Tag, Color, set_all  # type: ignor
 load_dotenv()
 
 
+def _read_secret_from_op(reference: str) -> str:
+    """Resolve an op:// secret using the 1Password CLI."""
+
+    candidate_paths = []
+
+    configured_path = os.getenv("OP_CLI_BIN")
+    if configured_path:
+        candidate_paths.append(configured_path)
+
+    detected_path = shutil.which("op")
+    if detected_path:
+        candidate_paths.append(detected_path)
+
+    candidate_paths.extend([
+        "/opt/homebrew/bin/op",
+        "/usr/local/bin/op",
+    ])
+
+    op_path = next((p for p in candidate_paths if p and Path(p).exists()), None)
+    if op_path is None:
+        raise SystemExit(
+            "Could not find the 1Password CLI binary (`op`). Ensure it is installed and available via PATH or export OP_CLI_BIN."
+        )
+
+    env = os.environ.copy()
+    command = [op_path, "read", reference]
+    result = subprocess.run(command, capture_output=True, text=True, env=env)
+
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        raise SystemExit(
+            "Failed to resolve OPENAI_API_KEY via 1Password CLI. "
+            "Confirm the service account token (OP_SERVICE_ACCOUNT_TOKEN or OP_ACCESS_TOKEN) is exported and valid. "
+            f"CLI output: {message}"
+        )
+
+    secret = result.stdout.strip()
+    if not secret:
+        raise SystemExit(
+            f"1Password CLI returned an empty value for {reference}. Check that the secret contains the API key."
+        )
+
+    return secret
+
+
 def _resolve_api_key() -> str:
     """Return a usable OpenAI API key or exit with an actionable message."""
 
@@ -55,9 +102,7 @@ def _resolve_api_key() -> str:
         )
 
     if candidate.startswith("op://"):
-        raise SystemExit(
-            "OPENAI_API_KEY resolves to a 1Password secret reference (op://...). Unlock 1Password (`op signin`) and launch SmartParse via `op run --env-file=.env -- ...` so the real key is available."
-        )
+        candidate = _read_secret_from_op(candidate)
 
     if candidate.lower().startswith("your-") or "api-key" in candidate.lower():
         raise SystemExit(
