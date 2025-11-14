@@ -138,4 +138,4 @@ SmartParse.AI.code-workspace
 /logs
 worklog.md
 /bin
-.vscode/settings.json
+/.vscode
