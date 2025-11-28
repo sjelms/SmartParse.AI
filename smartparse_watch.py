@@ -298,10 +298,28 @@ def refill_queue() -> None:
     except Exception as e:
         print(f"Error during refill queue scan: {e}")
 
-def mark_as_failed(filepath: Path) -> Path:
+def show_failure_dialog(filename: str, error_message: str):
+    """
+    Displays a modal dialog box with the failure reason using AppleScript.
+    """
+    import subprocess
+    # Escape double quotes in the error message to prevent AppleScript syntax errors
+    safe_error = error_message.replace('"', '\\"')
+    safe_filename = filename.replace('"', '\\"')
+    
+    applescript = f'''
+    display dialog "❌ File Failed: {safe_filename}\\n\\nReason: {safe_error}" buttons {{"OK"}} default button "OK" with title "SmartParse.AI Error" with icon stop
+    '''
+    try:
+        subprocess.run(['osascript', '-e', applescript], check=False)
+    except Exception as e:
+        print(f"Failed to show dialog: {e}")
+
+def mark_as_failed(filepath: Path, error_message: Optional[str] = None) -> Path:
     """
     Marks a file as failed by renaming it with a 'failed_' prefix in the same directory.
     This function is used to flag files that could not be processed successfully.
+    Also displays a dialog box with the error message if provided.
     """
     parent = filepath.parent
     failed_name = f"failed_{filepath.name}"
@@ -310,6 +328,10 @@ def mark_as_failed(filepath: Path) -> Path:
         filepath.rename(failed_path)
         print(f"Marked file as failed: {failed_path}")
         notify_user(f"Could not process: {filepath.name}")
+        
+        if error_message:
+            show_failure_dialog(filepath.name, error_message)
+            
     except Exception as e:
         print(f"Could not mark file as failed ({filepath}): {e}")
     return failed_path
@@ -400,12 +422,12 @@ class FileHandler(FileSystemEventHandler):
                 if not description or any(c in description for c in '{}[]/\\') or len(description) > 160:
                     print(f"Invalid description from AI: {description}. Marking as failed.")
                     log_file_operation(filepath, None, "image", None, "fail", error="Invalid description from AI")
-                    mark_as_failed(filepath)
+                    mark_as_failed(filepath, error_message="Invalid description from AI")
                     return
             except Exception:
                 print(f"Failed to parse AI response as JSON for {filepath}. Marking as failed.")
                 log_file_operation(filepath, None, "image", None, "fail", error="Failed to parse AI response as JSON")
-                mark_as_failed(filepath)
+                mark_as_failed(filepath, error_message="Failed to parse AI response as JSON")
                 return
             timestamp = get_file_datetime_string(filepath)
             new_name = f"{description}_{timestamp}{filepath.suffix.lower()}"
@@ -421,7 +443,7 @@ class FileHandler(FileSystemEventHandler):
         except Exception as e:
             print(f"Error processing image file {filepath}: {e}")
             log_file_operation(filepath, None, "image", None, "fail", error=str(e))
-            mark_as_failed(filepath)
+            mark_as_failed(filepath, error_message=str(e))
 
     def process_pdf(self, filepath: Path) -> None:
         """
@@ -443,7 +465,7 @@ class FileHandler(FileSystemEventHandler):
             if not text:
                 print(f"PDF {filepath} has no extractable text. Marking as failed.")
                 log_file_operation(filepath, None, "pdf", None, "fail", error="No extractable text")
-                mark_as_failed(filepath)
+                mark_as_failed(filepath, error_message="No extractable text")
                 return
             allowed_categories = [
                 "Book", "Academic Paper", "Contract", "Invoice", "Receipt", "Statement", "Manual/Guide", "Report", "Form", "Presentation", "Brochure/Flyer", "Resume/CV", "Letter", "Certificate", "Agreement"
@@ -468,7 +490,7 @@ class FileHandler(FileSystemEventHandler):
         except Exception as e:
             print(f"Error processing PDF file {filepath}: {e}")
             log_file_operation(filepath, None, "pdf", None, "fail", error=str(e))
-            mark_as_failed(filepath)
+            mark_as_failed(filepath, error_message=str(e))
 
     def process_textfile(self, filepath: Path) -> None:
         """
@@ -506,7 +528,7 @@ class FileHandler(FileSystemEventHandler):
                 text = '\n'.join(lines)
             elif ext in {".doc", ".xls", ".ppt"}:
                 print(f"Legacy Office format not supported for text extraction: {filepath}")
-                mark_as_failed(filepath)
+                mark_as_failed(filepath, error_message=f"Legacy Office format not supported: {ext}")
                 return
             else:
                 with open(filepath, "r", encoding="utf-8") as f:
@@ -514,7 +536,7 @@ class FileHandler(FileSystemEventHandler):
             if not text.strip():
                 print(f"Text file {filepath} has insufficient content. Marking as failed.")
                 log_file_operation(filepath, None, "text", None, "fail", error="Insufficient content")
-                mark_as_failed(filepath)
+                mark_as_failed(filepath, error_message="Insufficient content")
                 return
             allowed_categories = [
                 "Notes", "Outline", "Draft", "Paper", "Journal Entry", "List", "Code", "Markdown", "Recipe", "Correspondence", "Brainstorm", "Transcript"
@@ -545,7 +567,7 @@ class FileHandler(FileSystemEventHandler):
         except Exception as e:
             print(f"Error processing text file {filepath}: {e}")
             log_file_operation(filepath, None, "text", None, "fail", error=str(e))
-            mark_as_failed(filepath)
+            mark_as_failed(filepath, error_message=str(e))
 
     def handle_file(self, filepath: Path) -> None:
         """
@@ -561,7 +583,7 @@ class FileHandler(FileSystemEventHandler):
         else:
             print(f"Unsupported file type: {filepath.name}")
             log_file_operation(filepath, None, "unknown", None, "fail", error="Unsupported file type")
-            mark_as_failed(filepath)
+            mark_as_failed(filepath, error_message=f"Unsupported file type: {ext}")
 
 def generate_filename_and_category_from_text(text: str, model: str, allowed_categories: list[str], prompt_extra: str = "") -> tuple[str, str]:
     """
@@ -681,9 +703,9 @@ if __name__ == "__main__":
         except Exception:
             batch_stats['fail_count'] += 1
             raise
-    def patched_mark_as_failed(filepath):
+    def patched_mark_as_failed(filepath, error_message=None):
         batch_stats['fail_count'] += 1
-        return orig_mark_as_failed(filepath)
+        return orig_mark_as_failed(filepath, error_message)
 
     FileHandler.process_image = patched_process_image
     FileHandler.process_pdf = patched_process_pdf
