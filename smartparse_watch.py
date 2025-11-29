@@ -383,13 +383,16 @@ class FileHandler(FileSystemEventHandler):
                     "role": "system",
                     "content": (
                         "You are a helpful assistant that generates descriptive, searchable filenames and a category label based on the visual and textual content of an image. "
-                        "Detect whether the image contains visible text. If text is present, extract key phrases and any clear sentiment or tone (e.g., urgent, humorous, inspirational) and incorporate them succinctly. "
-                        "By default, the filename must consist of 10 to 12 lowercase words, no punctuation, no underscores, no file extension. If the image contains text, you may use up to 16 lowercase words to capture key text and sentiment. Be concise but informative. "
-                        "Return ONLY a JSON object with two fields: 'description' (10–12 lowercase words, or up to 16 if the image contains text; no punctuation, no underscores, no file extension) and 'category' (one of: Quote, Sign, Cartoon, Meme, Photo, Illustration, Diagram, Screenshot, Logo, Map, Chart/Graph). "
+                        "Detect whether the image contains visible text. If text is present, it is the primary source of truth—include specific names, dates, headers, or key phrases found in the image. "
+                        "For visual-only images, describe specific attributes: colors, setting, action, mood. "
+                        "Avoid generic filler phrases like 'image of', 'picture showing', 'screenshot of'. Focus purely on the content. "
+                        "By default, the filename must consist of 10 to 18 lowercase words, no punctuation, no underscores, no file extension. Do not use fewer than 10 words. "
+                        "Start with the main subject or entity, then the action/context, then specific details. If it looks like part of a series, include distinguishing details (e.g., 'page 1', 'part 2'). "
+                        "Return ONLY a JSON object with two fields: 'description' (10–18 lowercase words; no punctuation, no underscores, no file extension) and 'category' (one of: Quote, Sign, Cartoon, Meme, Photo, Illustration, Diagram, Screenshot, Logo, Map, Chart/Graph). "
                         "The 'description' will be used as the filename (with a timestamp), and the 'category' will be used as a Finder tag (not in the filename). "
                         "If the content does not fit any category, use 'Other'. "
-                        "Example without text: {\"description\": \"golden retriever surfing ocean wave at sunset\", \"category\": \"Photo\"} "
-                        "Example with text: {\"description\": \"conference badge speaker anna lee ai ethics keynote optimistic\", \"category\": \"Screenshot\"}"
+                        "Example without text: {\"description\": \"golden retriever dog surfing large ocean wave at sunset with orange sky background\", \"category\": \"Photo\"} "
+                        "Example with text: {\"description\": \"conference badge for speaker anna lee regarding ai ethics keynote presentation optimistic tone 2024\", \"category\": \"Screenshot\"}"
                     ),
                 },
                 {
@@ -474,7 +477,7 @@ class FileHandler(FileSystemEventHandler):
                 text,
                 model=MODEL_PDF,
                 allowed_categories=allowed_categories,
-                prompt_extra="Prioritize including key identifiers such as paper titles, author names, organizations (e.g. McKinsey, Ministry of Housing, Columbia University), or publication dates. The filename must consist of between 7 and 10 lowercase words, no punctuation, no underscores, no file extension. Be as descriptive as possible within this range."
+                prompt_extra="Prioritize including key identifiers such as paper titles, author names, organizations (e.g. McKinsey, Ministry of Housing, Columbia University), or publication dates. The filename must consist of between 10 and 18 lowercase words, no punctuation, no underscores, no file extension. Do not use fewer than 10 words. Be as descriptive as possible within this range."
             )
             timestamp = get_file_datetime_string(filepath)
             new_name = f"{description}_{timestamp}{filepath.suffix.lower()}"
@@ -546,7 +549,7 @@ class FileHandler(FileSystemEventHandler):
                 model=MODEL_TEXT,
                 allowed_categories=allowed_categories,
                 prompt_extra=(
-                    "The filename must consist of between 7 and 10 lowercase words, no punctuation, no underscores, no file extension. Be as descriptive as possible within this range. "
+                    "The filename must consist of between 10 and 18 lowercase words, no punctuation, no underscores, no file extension. Do not use fewer than 10 words. Be as descriptive as possible within this range. "
                     "Choose the most specific and accurate category from the list based on the content. "
                     "Do not default to 'Correspondence' unless the file is truly a letter, email, or message. "
                     "If the file is a transcript of a conversation, interview, or meeting, use 'Transcript'. "
@@ -593,10 +596,13 @@ def generate_filename_and_category_from_text(text: str, model: str, allowed_cate
     allowed_str = ', '.join(allowed_categories)
     system_prompt = (
         f"You are a helpful assistant that generates short, descriptive filenames and a category label based on provided file content. "
-        f"Return ONLY a JSON object with two fields: 'description' (between 7 and 10 lowercase words, no punctuation, no underscores, no file extension, be as descriptive as possible within this range) and 'category' (one of: {allowed_str}). "
+        f"Return ONLY a JSON object with two fields: 'description' (between 10 and 18 lowercase words, no punctuation, no underscores, no file extension, be as descriptive as possible within this range) and 'category' (one of: {allowed_str}). "
+        f"Structure the filename as: [main entity/author] [document type] [specific topic/title] [date/version details]. Ensure consistent naming for similar documents. "
+        f"Avoid generic filler words like 'document regarding', 'file about', 'information on'. Start directly with the subject. "
+        f"Extract and include specific unique identifiers: Invoice numbers, Project IDs, exact dates (e.g., 'january 2025'), and full entity names. "
         f"The 'description' will be used as the filename (with a timestamp), and the 'category' will be used as a Finder tag (not in the filename). "
         f"If the content does not fit any category, use 'Other'. "
-        f"Example: {{\"description\": \"product configuration in construction patrik jensen\", \"category\": \"Report\"}} (filename: product configuration in construction patrik jensen_2025-07-19_13.05.10.pdf, tag: Report)"
+        f"Example: {{\"description\": \"construction company patrik jensen product configuration report for q3 2025 detailed analysis\", \"category\": \"Report\"}} (filename: construction company patrik jensen product configuration report for q3 2025 detailed analysis_2025-07-19_13.05.10.pdf, tag: Report)"
     )
     if prompt_extra:
         system_prompt += " " + prompt_extra
