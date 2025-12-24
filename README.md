@@ -16,7 +16,7 @@ To enable the right-click Finder action for SmartParse.AI:
 
 The Automator workflow reads the Python interpreter, script path, and optional overrides from the config file at runtime; no personal paths are baked into the workflow bundle.
 
-Requires: Python 3.13 (or compatible), with dependencies installed in the interpreter pointed to by your config.
+Requires: Python 3.13+ (or compatible), with dependencies installed in the interpreter pointed to by your config.
 
 ---
 
@@ -101,7 +101,7 @@ It is designed to be lightweight and non-intrusive, running only when triggered 
 
 ## 🧠 Framework
 
-- **Python 3.13.5**
+- **Python 3.13+**
 - **OpenAI API** (gpt-3.5-turbo and gpt-4o)
 - **PyMuPDF** for PDF processing
 - **BeautifulSoup4 + lxml** for HTML parsing
